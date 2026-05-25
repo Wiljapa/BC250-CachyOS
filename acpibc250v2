@@ -1,0 +1,100 @@
+#!/bin/bash
+# Script de Automação ACPI via HOOK Nativo + Fan Driver no CachyOS
+set -e
+
+echo "==> 1. Instalando dependências e clonando o repositório completo..."
+sudo pacman -S iasl cpio --needed --noconfirm
+
+echo "==> 2. Instalando driver NCT6687..."
+
+paru -S --noconfirm nct6687d-dkms-git 2>/dev/null || \
+paru -S --noconfirm nct6687d 2>/dev/null || {
+    echo "[ERRO] Falha ao instalar o driver nct6687."
+    exit 1
+}
+
+echo "==> 3. Configurando módulo da fan..."
+
+sudo mkdir -p /etc/modprobe.d
+
+sudo tee /etc/modprobe.d/bc250-sensors.conf > /dev/null << 'EOF'
+# BC250 Fan/Sensor Driver
+
+blacklist nct6683
+options nct6687 force=true
+EOF
+
+sudo mkdir -p /etc/modules-load.d
+
+sudo tee /etc/modules-load.d/99-bc250-sensors.conf > /dev/null << 'EOF'
+nct6687
+EOF
+
+sudo rm -rf bc250-acpi-fix
+
+git clone https://github.com/bc250-collective/bc250-acpi-fix.git
+
+echo "==> 4. Compilando as tabelas..."
+
+(
+    cd bc250-acpi-fix
+
+    iasl -tc SSDT-CST.dsl
+    iasl -tc SSDT-PST.dsl
+
+    echo "==> 5. Movendo arquivos .aml para a pasta oficial do HOOK..."
+
+    sudo mkdir -p /etc/initcpio/acpi_override
+    sudo cp *.aml /etc/initcpio/acpi_override/
+)
+
+echo "==> 6. Forçando a desativação da compactação no mkinitcpio..."
+
+if grep -q "^COMPRESSION=" /etc/mkinitcpio.conf; then
+    sudo sed -i 's/^COMPRESSION=.*/COMPRESSION=\"cat\"/' /etc/mkinitcpio.conf
+else
+    echo 'COMPRESSION="cat"' | sudo tee -a /etc/mkinitcpio.conf
+fi
+
+echo "==> 7. Garantindo o hook acpi_override no /etc/mkinitcpio.conf..."
+
+if ! grep -q "acpi_override" /etc/mkinitcpio.conf; then
+    sudo sed -i 's/autodetect/autodetect acpi_override/g' /etc/mkinitcpio.conf
+
+    echo "[OK] Hook acpi_override ativado no arquivo de configuração."
+else
+    echo "[AVISO] O hook acpi_override já está presente."
+fi
+
+echo "==> 8. Carregando módulo NCT6687..."
+sudo modprobe nct6687 2>/dev/null || true
+
+echo "==> 9. Configurando os parâmetros de boot permanentes no /etc/default/limine..."
+
+sudo tee /etc/default/limine > /dev/null << 'EOF'
+SP_PATH="/boot"
+KERNEL_CMDLINE_default="acpi_override=1 quiet nowatchdog splash rw rootflags=subvol=/@ root=UUID=3a285744-1f0c-4683-9704-a4225cd6535b systemd.zram=0 zswap.enabled=1 zswap.max_pool_percent=25 zswap.compressor=lz4 loglevel=0 mitigations=off"
+BOOT_ORDER="*, *lts, *fallback, Snapshots"
+EOF
+
+echo "==> 10. Rodando mkinitcpio e sincronizando com o Limine..."
+
+yes "" | sudo limine-mkinitcpio
+
+echo ""
+echo "===================================================================="
+echo " BC250 ACPI + Fan Driver configurados com sucesso!"
+echo ""
+echo " Recursos aplicados:"
+echo " - Native ACPI Override"
+echo " - COMPRESSION=\"cat\""
+echo " - NCT6687 Fan Driver"
+echo " - PWM desbloqueado"
+echo " - Compatível com CoolerControl"
+echo ""
+echo " Após reiniciar teste:"
+echo "   sensors"
+echo "   watch -n 1 sensors"
+echo ""
+echo " Depois configure as fans no CoolerControl."
+echo "===================================================================="
