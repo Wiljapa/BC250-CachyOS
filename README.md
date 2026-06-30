@@ -1,5 +1,5 @@
 Se estiver instalado o cachyos a partir dessa data 2026/06/30
-Houve mudanças no sistema desabilitaram o aur e retiraram o paru, que são necessários para o script funcionar. 
+Houve mudanças no sistema, desabilitaram o aur e retiraram o paru, que são necessários para o script funcionar. 
 Habilite o aur pelo shelly
 Instale o paru : sudo pacman -S paru. 
 Agora pode rodar o script. 
