@@ -11,3 +11,18 @@ Esse script instala o acpi fix na bc250 de modo permanente (só para quem usa ca
 Instala o modulo da fan NCT6687 para os sensores apareceram no cooler control
 Não preciso dizer que é por sua conta e risco.
 Ajudando a comunidade em geral e a comunidade amd BC 250 Brasil 
+
+Substituir o daemon e utilitários do kde para poder controlar a cpu pelo icone de energia na tray do kde
+
+sudo pacman -Rs cpupower power-profiles-daemon
+
+Instale o tuned
+
+sudo pacman -Sy tuned-cachy tuned-cachy-ppd
+
+Habilite os serviços
+
+sudo systemctl enable --now tuned.service
+sudo systemctl enable --now tuned-ppd.service
+
+Reinicie
