@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -e
+
+echo "==> 1. Instalando dependências e clonando o repositório completo..."
+sudo pacman -S iasl cpio git --needed --noconfirm
+
+echo "==> 2. Instalando driver NCT6687..."
+if ! pacman -Qi nct6687d-dkms-git &>/dev/null; then
+    paru -S --noconfirm nct6687d-dkms-git || paru -S --noconfirm nct6687d || {
+        echo "[ERRO] Falha ao instalar o driver nct6687."
+        exit 1
+    }
+fi
+
+echo "==> 3. Configurando módulo da fan..."
+sudo mkdir -p /etc/modprobe.d /etc/modules-load.d
+
+sudo tee /etc/modprobe.d/bc250-sensors.conf > /dev/null << 'EOF'
+# BC250 Fan/Sensor Driver
+blacklist nct6683
+options nct6687 force=true
+EOF
+
+sudo tee /etc/modules-load.d/99-bc250-sensors.conf > /dev/null << 'EOF'
+nct6687
+EOF
+
+# Limpeza e clone seguro
+sudo rm -rf bc250-acpi-fix
+git clone https://github.com/bc250-collective/bc250-acpi-fix.git
+
+echo "==> 4. Compilando as tabelas..."
+(
+    cd bc250-acpi-fix
+    iasl -tc SSDT-CST.dsl
+    iasl -tc SSDT-PST.dsl
+
+    echo "==> 5. Movendo arquivos .aml para a pasta oficial do HOOK..."
+    sudo mkdir -p /etc/initcpio/acpi_override
+    sudo cp *.aml /etc/initcpio/acpi_override/
+)
+
+echo "==> 6. Forçando a desativação da compactação no mkinitcpio..."
+if grep -q "^COMPRESSION=" /etc/mkinitcpio.conf; then
+    sudo sed -i 's/^COMPRESSION=.*/COMPRESSION="cat"/' /etc/mkinitcpio.conf
+else
+    echo 'COMPRESSION="cat"' | sudo tee -a /etc/mkinitcpio.conf
+fi
+
+echo "==> 7. Garantindo o hook acpi_override no /etc/mkinitcpio.conf..."
+# Verifica em maiúsculo (HOOKS) se já existe
+if ! grep -q "acpi_override" /etc/mkinitcpio.conf; then
+    if grep -q "systemd" /etc/mkinitcpio.conf; then
+        sudo sed -i 's/systemd/systemd acpi_override/g' /etc/mkinitcpio.conf
+    elif grep -q "udev" /etc/mkinitcpio.conf; then
+        sudo sed -i 's/udev/udev acpi_override/g' /etc/mkinitcpio.conf
+    else
+        sudo sed -i 's/HOOKS=(/HOOKS=(acpi_override /g' /etc/mkinitcpio.conf
+    fi
+    echo "[OK] Hook acpi_override ativado no arquivo de configuração."
+else
+    echo "[AVISO] O hook acpi_override já está presente."
+fi
+
+echo "==> 8. Carregando módulo NCT6687..."
+sudo modprobe nct6687 2>/dev/null || true
+
+echo "==> 9. Injetando dinamicamente o parâmetro de boot no Limine..."
+REAL_UUID=$(findmnt -no UUID /)
+
+if [ -f /etc/default/limine]; then
+    if ! grep -q "acpi_override=1" /etc/default/limine; then
+        sudo sed -i 's/KERNEL_CMDLINE_default="/KERNEL_CMDLINE_default="acpi_override=1 /g' /etc/default/limine
+        echo "[OK] Parâmetro acpi_override=1 adicionado ao arquivo existente."
+    else
+        echo "[AVISO] Parâmetro acpi_override=1 já existe no Limine."
+    fi
+else
+    echo "[AVISO] /etc/default/limine não encontrado. Criando um novo com o seu UUID real."
+    sudo tee /etc/default/limine > /dev/null << EOF
+SP_PATH="/boot"
+KERNEL_CMDLINE_default="acpi_override=1 quiet nowatchdog splash rw rootflags=subvol=/@ root=UUID=$REAL_UUID systemd.zram=0 zswap.enabled=1 zswap.max_pool_percent=25 zswap.compressor=lz4 loglevel=0 mitigations=off"
+BOOT_ORDER="*, *lts, *fallback, Snapshots"
+EOF
+fi
+
+echo "==> 10. Rodando mkinitcpio e sincronizando com o Limine..."
+yes "" | sudo limine-mkinitcpio
+
+echo ""
+echo "===================================================================="
+echo " BC250 ACPI + Fan Driver configurados com sucesso de forma segura!"
+echo "===================================================================="
